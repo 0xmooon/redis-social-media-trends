@@ -2,7 +2,7 @@
 
 A small real-time analytics system that simulates social media interactions (**likes** and **comments**) and computes **hashtag trends** using **Redis**.
 
-This project was built as a **NoSQL coursework** project and is also suitable for portfolio purposes.
+This project was built as a **NoSQL coursework** project.
 
 ---
 
