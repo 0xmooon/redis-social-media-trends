@@ -1,238 +1,105 @@
-# Analiza trendów w mediach społecznościowych z wykorzystaniem Redis
+# Redis Social Media Trend Analytics (Real-Time)
 
-### Przedmiot: Bazy NoSQL
-### Temat: 3.8 Analiza trendów w social media
-### Autor: Oleksandra Basarab
+A small real-time analytics system that simulates social media interactions (**likes** and **comments**) and computes **hashtag trends** using **Redis**.
 
-1. Cel projektu
+This project was built as a **NoSQL coursework** project and is also suitable for portfolio purposes.
 
-Celem projektu było zaprojektowanie i implementacja systemu do analizy trendów hashtagów w mediach społecznościowych z wykorzystaniem bazy danych NoSQL Redis.
+---
 
-System umożliwia:
+## What the project does
 
-- rejestrowanie zdarzeń (polubień i komentarzy),
+The system supports:
 
-przetwarzanie zdarzeń w czasie rzeczywistym,
+- registering events (likes and comments),
+- processing events in near real time,
+- aggregating per-hashtag statistics (likes, comments, total events),
+- building a **TOP-N hashtag ranking** (global),
+- building a **time-window ranking** (24h) using **TTL**,
+- interactive usage via a **CLI menu**,
+- exporting aggregated hashtag statistics to **CSV** (for offline analysis).
 
-agregację danych dla poszczególnych hashtagów,
+---
 
-tworzenie rankingu najpopularniejszych hashtagów,
+## Why Redis?
 
-analizę trendów w oknie czasowym (24h),
+Redis is a **key-value NoSQL** database that stores data **in-memory**, which makes reads/writes extremely fast.  
+This project fits Redis well because it needs:
 
-interaktywną obsługę systemu poprzez aplikację CLI.
+- an **event stream**,
+- **counters / aggregates**,
+- a fast **ranking**,
+- a **time window** (data expiration).
 
-Projekt skupia się na wykorzystaniu różnych struktur danych Redis oraz na uzasadnieniu ich zastosowania w kontekście systemów analitycznych czasu rzeczywistego.
+Redis provides built-in structures that map directly to these needs:
 
-2. Uzasadnienie wyboru bazy Redis
+- **Streams** → event log (`stream:events`)
+- **Hashes** → per-hashtag aggregated stats (`hashtag:{tag}`)
+- **Sorted Sets (ZSET)** → rankings (`ranking:hashtags`, `ranking:hashtags:24h`)
+- **TTL** → automatic expiration for the 24h ranking
 
-Redis jest bazą danych typu key-value, zaliczaną do systemów NoSQL. Dane przechowywane są w pamięci operacyjnej (in-memory), co zapewnia bardzo wysoką wydajność operacji odczytu i zapisu.
+Compared to a relational database, this approach avoids heavy aggregation queries and uses Redis-native operations for fast updates and reads.
 
-Redis został wybrany z następujących powodów:
+---
 
-bardzo szybkie operacje (złożoność O(1) dla wielu struktur),
+## Architecture (high level)
 
-wsparcie dla wielu typów danych (Strings, Hashes, Sorted Sets, Streams),
+1. A producer generates events (`like` / `comment`) for hashtags and appends them to a Redis Stream.
+2. A consumer reads **only new events** (based on the last processed stream ID).
+3. The consumer updates:
+   - per-hashtag aggregates stored in a Redis Hash (`likes`, `comments`, `count`)
+   - global and time-window rankings stored in Redis Sorted Sets
+4. A CLI application displays results and allows managing the system.
 
-natywna obsługa TTL (Time To Live),
+Optional diagram:
 
-możliwość przetwarzania strumieni zdarzeń w czasie rzeczywistym (Redis Streams),
+![](przeplyw.png)
 
-prostota integracji z Pythonem (biblioteka redis-py),
+---
 
-możliwość uruchomienia w środowisku Docker.
+## Code structure
 
-W kontekście analizy trendów w czasie rzeczywistym Redis jest szczególnie odpowiedni, ponieważ umożliwia szybkie inkrementowanie liczników oraz dynamiczne tworzenie rankingów bez konieczności wykonywania kosztownych zapytań agregujących.
+- `event_producer.py` – generates and appends events to Redis Stream
+- `event_consumer.py` – processes new events and updates aggregates + rankings
+- `analytics.py` – reads rankings and hashtag stats
+- `app.py` – interactive CLI menu
+- `export_csv.py` – exports aggregated hashtag stats to CSV
 
-3. Architektura systemu
-3.1 Ogólny schemat działania
+---
 
-System działa według następującego schematu:
+## Redis data model
 
-Generowanie zdarzeń (like / comment).
+### Stream (events)
+- Key: `stream:events`
+- Stores fields: `type`, `hashtag`, `user_id`, `timestamp`
 
-Zapis zdarzeń do Redis Stream.
+### Hash (per-hashtag aggregates)
+- Key: `hashtag:{tag}` (e.g. `hashtag:#redis`)
+- Fields: `likes`, `comments`, `count`
 
-Odczyt nowych zdarzeń przez proces konsumenta.
+### Sorted Sets (rankings)
+- Global ranking: `ranking:hashtags`
+- Time-window ranking: `ranking:hashtags:24h`
 
-Agregacja danych w strukturach Hash.
+### Time window (TTL)
+- `ranking:hashtags:24h` is created/updated by the consumer and has a TTL
+- TTL is set once per window (**fixed time window** behavior)
 
-Aktualizacja rankingów w Sorted Set.
+---
 
-Udostępnienie wyników poprzez aplikację CLI.
+## Ranking logic
 
-Schemat logiczny:
+The ranking uses weighted interactions:
 
-Event → Stream → Consumer → Agregacja → Ranking → Odczyt
+- `like = 1 point`
+- `comment = 2 points`
 
-4. Struktury danych Redis wykorzystane w projekcie
-4.1 Redis Streams
+This makes comments more influential than likes (higher engagement).
 
-Klucz:
+---
 
-stream:events
+## How to run
 
-Wykorzystywane komendy:
+### 1) Start Redis (Docker)
 
-XADD
-
-XRANGE
-
-XLEN
-
-Każde zdarzenie zawiera pola:
-
-type (like / comment)
-
-hashtag
-
-user_id
-
-timestamp
-
-Strumień pełni rolę logu zdarzeń i umożliwia przetwarzanie danych w czasie rzeczywistym.
-
-4.2 Hash (agregacja danych)
-
-Klucz:
-
-hashtag:{tag}
-
-Pola:
-
-likes
-
-comments
-
-count
-
-Wykorzystywane komendy:
-
-HINCRBY
-
-HGET
-
-HGETALL
-
-Hash przechowuje zagregowane dane dla pojedynczego hashtagu.
-Zastosowanie Hash umożliwia przechowywanie powiązanych wartości w jednym kluczu, co jest bardziej spójne niż użycie wielu oddzielnych kluczy typu String.
-
-4.3 Sorted Sets (rankingi)
-
-Klucze:
-
-ranking:hashtags
-ranking:hashtags:24h
-
-Wykorzystywane komendy:
-
-ZINCRBY
-
-ZREVRANGE
-
-ZCARD
-
-ZSCORE
-
-Sorted Set umożliwia przechowywanie elementów wraz z wartością liczbową (score).
-Score jest obliczany jako:
-
-like = 1 punkt
-
-comment = 2 punkty
-
-Dzięki temu ranking uwzględnia wagę interakcji.
-
-4.4 TTL (Time To Live)
-
-Wykorzystywane komendy:
-
-EXPIRE
-
-TTL
-
-Ranking 24h posiada ustawiony czas wygaśnięcia.
-Po upływie określonego czasu dane są automatycznie usuwane, co pozwala symulować analizę trendów w określonym oknie czasowym (fixed time window).
-
-4.5 Pozostałe operacje Redis
-
-W projekcie wykorzystano również:
-
-GET / SET – zapamiętanie ostatniego przetworzonego ID,
-
-FLUSHALL – czyszczenie bazy (opcjonalnie z menu),
-
-DELETE – usuwanie rankingu 24h.
-
-5. Funkcjonalności aplikacji
-
-Aplikacja posiada interfejs CLI umożliwiający:
-
-Generowanie danych
-
-generowanie N losowych zdarzeń,
-
-generowanie N zdarzeń dla konkretnego hashtagu,
-
-ręczne dodanie pojedynczego zdarzenia.
-
-Przetwarzanie
-
-przetworzenie nowych zdarzeń ze streamu,
-
-inkrementacja liczników,
-
-aktualizacja rankingów.
-
-Analiza
-
-wyświetlenie TOP N hashtagów (globalnie),
-
-wyświetlenie TOP N hashtagów (24h),
-
-wyświetlenie statystyk konkretnego hashtagu,
-
-lista wszystkich śledzonych hashtagów.
-
-System
-
-reset rankingu 24h,
-
-wyświetlenie informacji systemowych (liczba eventów, TTL, ostatnie ID),
-
-bezpieczne czyszczenie bazy (Flush ALL z potwierdzeniem).
-
-6. Analiza trendów
-
-System umożliwia:
-
-analizę popularności hashtagów w czasie rzeczywistym,
-
-porównanie rankingu globalnego i 24h,
-
-obserwację wygasania danych czasowych,
-
-dynamiczne przeliczanie rankingu na podstawie wag interakcji.
-
-Różnica między rankingiem globalnym a 24h pozwala na analizę zmiany popularności w czasie.
-
-7. Technologie wykorzystane w projekcie
-
-Redis
-
-Docker
-
-Python 3
-
-redis-py
-
-CLI (interfejs terminalowy)
-
-
-8. Podsumowanie
-
-Projekt pokazuje praktyczne zastosowanie bazy NoSQL Redis do analizy danych w czasie rzeczywistym.
-
-Wykorzystanie różnych struktur danych (Streams, Hash, Sorted Sets, TTL) umożliwiło stworzenie wydajnego systemu analitycznego bez konieczności użycia relacyjnej bazy danych.
-
-System jest skalowalny, modularny i umożliwia dalszą rozbudowę o kolejne funkcjonalności analityczne.
+```bash
+docker run --name redis-trending -p 6379:6379 -d redis
